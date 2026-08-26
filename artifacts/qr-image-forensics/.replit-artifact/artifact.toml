@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "QR Image Forensics"
+description = "An offline-first image forensics workspace that lets security teams upload suspicious images, decode QR codes, inspect visible text, review explainable risk signals, and export findings."
+version = "1.0.0"
+id = "artifacts/qr-image-forensics"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23082
+
+[services.development]
+run = "pnpm --filter @workspace/qr-image-forensics run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/qr-image-forensics", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/qr-image-forensics/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23082"
+BASE_PATH = "/"

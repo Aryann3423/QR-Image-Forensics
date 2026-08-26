@@ -1,0 +1,129 @@
+Member 4: QR/Image Scanner Module Report
+Executive Summary
+The QR/Image Scanner module will scan email attachments or embedded images for QR codes and other suspicious content. It should reliably detect and decode QR barcodes in images, extract any visible text via OCR, and (optionally) flag malicious content (e.g. known bad URLs). We recommend using mature libraries (PyZbar/ZBar, OpenCV, Tesseract, etc.) and optional web APIs (VirusTotal) for reputation checks. The module will expose a clean input/output interface (e.g. accept a file path or image and return a JSON of findings), integrate with the main Streamlit app and other forensics engines, and handle errors (no QR, unreadable images, missing API keys) gracefully.
+
+Objectives
+Detect & decode QR codes: Scan the image for QR/ barcodes and return decoded data.
+Extract image text: Use OCR to read any visible text in the image (e.g. spam/phishing text).
+Check malicious content: If a QR yields a URL or image file, optionally check it against VirusTotal or an antivirus API.
+Produce standardized output: Return a JSON with keys like qr_found, qr_data, extracted_text, and any risk indicators.
+Integrate smoothly: Work as a module callable from the main app, with defined inputs/outputs and no interactive UI.
+Recommended Libraries/Tools
+Library / Tool	Purpose	Pros & Cons	License	Notes / Sources
+PyZbar (ZBar)	QR/barcode decoding	Accuracy: ~39% on real-world QR (open dataset); Speed: ~30 FPS (per dev); Integration: Pure Python wrapper, works with Pillow/OpenCV. Easy pip install but requires ZBar C library.	MIT	Widely used, returns raw & parsed data.
+OpenCV	QR detection/decoding (cv2.QRCodeDetector)	Accuracy: ~49% on diverse images; Speed: moderate (C++ backend), can detect multiple QRs at once. Integration: pip install opencv-python. Large library (~200MB), BSD license.	BSD-3-Clause	Built-in QR detector, returns decoded text and coordinates.
+ZXing (python-zxing)	QR/barcode via Java ZXing	Accuracy: ~32% on diverse images; slower (calls Java), can only read one code per image by default. Integration: Requires Java runtime and ZXing JAR (pip handles it). Licensed LGPLv3.	LGPLv3+	Decodes QR and many symbologies, output includes raw/parsed text.
+pytesseract (Tesseract OCR)	Extract text from images	Purpose: Not QR-specific, but OCR for any visible text. Accuracy: High for clear text; Speed: depends on image and config. Integration: Needs Tesseract engine installed. Licensed Apache 2.0.	Apache 2.0	Can flag suspicious phrases (e.g. “Urgent”, “KYC”) in images.
+Pillow (PIL)	General image I/O	Purpose: Load/convert images. Integration: pip install pillow. Use to read images and re-save (flatten) to remove hidden content. Licensed PIL (PIL/Pillow license, MIT-like).	PIL-friendly	Can be used to “flatten” images (load and re-save) which removes appended malicious data.
+VirusTotal API	(Optional) URL/file reputation	Purpose: Scan extracted URLs or image file for threats. Integration: HTTP API (requires API key). Pros: Access to 70+ AV engines. Cons: Rate limits, online only.	Proprietary (free tier limited)	Use e.g. requests to submit URL or file hash and parse JSON results.
+
+Comparison Table (QR Libraries)
+Library	Accuracy (challenging QR)	Speed	Integration Ease	License
+PyZbar (ZBar)	Moderate (~39% success in real images)	High (~30 FPS decode stream)	Simple (pip, works with Pillow/ndarray)	MIT
+OpenCV (QRCodeDetector)	Better (~49% success)	Medium (C++ speed, multi-QR)	Easy (pip, built-in)	BSD-3
+ZXing (Java)	Lower (~32% success)	Slow (Java invoke per image)	More complex (requires Java and JAR)	LGPLv3+
+zbarlight	Same underlying library (~39%)	Very high (~100 FPS in Linux tests)	Requires C ext, fails on Windows	BSD
+pytesseract	N/A (OCR accuracy high for text)	Moderate (CPU-bound OCR)	Requires Tesseract engine install	Apache 2.0
+Others	(YOLO-based, etc.)	Variable	Heavy (needs ML models)	Various
+
+(We omitted commercial or unmaintained options. For simple QR decoding, PyZbar or OpenCV are recommended.)
+
+Inputs and Outputs (JSON Schema)
+Inputs: The function should accept an image (e.g. file path, PIL Image, or raw bytes). For Streamlit integration, this might come from st.file_uploader. Internally, load via Pillow or OpenCV.
+
+Outputs: Return a standardized JSON/dict. A suggested schema:
+
+json
+Copy
+{
+  "qr_detected": bool,            # True if any QR/barcodes were found
+  "qr_data": [                   # List of decoded strings from each QR/barcode
+    {
+      "type": "QR_CODE",         # (e.g. format/type of code)
+      "data": "https://...",     # decoded text/URL
+      "coords": [x,y,w,h]        # bounding box in image, if available
+    },
+    ...
+  ],
+  "extracted_text": string,      # OCR text found in image (empty if none)
+  "malicious": bool,             # (Optional) flagged if image/URL is malicious
+  "errors": [                   # Any error messages or notes
+    "no_qr_found", 
+    "ocr_timeout",
+    ...
+  ]
+}
+qr_detected is true if we decoded ≥1 QR/barcode.
+qr_data is an array of objects with decoded content (type, raw data, and location).
+extracted_text contains any OCR’d text.
+malicious could be set true if a check (e.g. VirusTotal) flags the content.
+errors lists any issues (no QR, unreadable file, etc.).
+This format mirrors other modules’ outputs (e.g. Member 3’s header module returned a dict of fields). The main app can then read these fields. For example:
+
+python
+Copy
+result = scan_image(file)
+if result["qr_detected"]:
+    for qr in result["qr_data"]:
+        st.write("QR content:", qr["data"])
+if result["malicious"]:
+    st.warning("Image/URL flagged as malicious!")
+Integration Points
+Streamlit App: Add a file uploader widget (e.g. st.file_uploader(label="Upload suspicious image")). On submission, call scan_image() with the uploaded image.
+Main Pipeline: Treat this as one forensic “engine”. After reading the user’s input (image), the Streamlit app should call the QR scanner module and collect its JSON output. Then combine with other modules (header forensics, text analysis, etc.).
+Module API: Define a function like analyze_image(image_input) that returns the JSON schema above. This function should not itself launch a GUI – it’s purely computational.
+Report Generation: Include the scanner’s findings in the PDF report (e.g. list decoded QR codes, OCR text). The PDF module will access the same JSON output.
+Error Handling & Optional Flows
+No QR code present: Return qr_detected = False and an error message in errors. Do not crash. The rest of pipeline should still run (e.g. maybe do OCR anyway).
+Unreadable or corrupt image: Catch exceptions from loading libraries. Return an error (errors list) and skip QR/OCR. The app can inform the user like “Image could not be processed.”
+Multiple QRs: If multiple codes exist, decode all of them and include each in qr_data. (OpenCV’s detectAndDecodeMulti or PyZbar automatically handle multiple.)
+Non-image uploads: Validate file type (Pillow/OpenCV will fail on non-image). Report “Invalid image file” in errors.
+Missing dependencies/API keys: If e.g. Tesseract is not installed or VirusTotal API key is missing, the module should note it (in errors) but still run other steps.
+Optional flows: If no QR is found, perhaps skip VirusTotal checks. If internet/API is unavailable, skip URL reputation but still return the QR text.
+
+Testing Plan
+Create a set of test images (in sample_data/):
+
+Valid QR image: A clear QR code (online generator) pointing to a known URL. Expect qr_detected=True, correct qr_data, and if using VirusTotal, a (likely clean) response.
+Multiple QRs: An image containing 2–3 QR codes. Expect 3 entries in qr_data.
+No QR: A normal picture or plain background. Expect qr_detected=False, no crash.
+Unreadable/Blank image: Corrupted bytes or blank file. Expect error handled gracefully.
+Image with text: E.g. a sign or poster. Expect extracted_text to contain that text.
+Small/noisy QR: A difficult QR (blurry, partial). Compare PyZbar vs OpenCV: one may succeed while other fails.
+Malicious QR: A QR leading to a known phishing URL. If using VirusTotal, expect malicious=True. Otherwise, demonstrate by highlighting the URL in the UI.
+For each case, write a test script or use pytest to feed images and verify the JSON output keys and values match expectations.
+
+Performance & Security Considerations
+Performance: The module should handle images in reasonable time (e.g. <1s for moderate size). PyZbar is quite fast (tens of FPS); OpenCV decoding is C-optimized. OCR (Tesseract) is slower (hundreds of ms). Avoid processing extremely large images (resize large images down before scanning).
+Security: If using external APIs (VirusTotal), do not hard-code API keys; store in environment variables. Be mindful of rate limits. When allowing file uploads, ensure the Streamlit app runs in a sandbox (e.g. container). If images are processed offline, you reduce risk – but malicious images can still exploit bugs in libs. Keeping Pillow and OpenCV updated is important.
+Malware in images: Embedding code in images is possible (e.g. appending data or steganography). A mitigation is to re-encode images with Pillow (img = Image.open(...); img.save("clean.png")) which strips unknown chunks. Our module can do this step before scanning to neutralize hidden payloads.
+Dependencies: Use pinned versions of libraries to avoid unexpected changes.
+Deployment Notes
+Dependencies: List them in requirements.txt: e.g. pyzbar, opencv-python, pillow, pytesseract, requests (for VirusTotal).
+Tesseract: If using OCR, the Tesseract engine must be installed on the system (e.g. apt package or binary). The Python wrapper requires pointing to tesseract_cmd.
+VirusTotal API: Needs a free API key (rate-limited to 4 requests/minute). Can skip in offline hackathon build. If used, add code to handle rate-limit (sleep or skip).
+Offline vs Online: The core QR/OCR works fully offline. Only URL/file reputation checks require Internet. For a quick prototype, focus on local detection and flag “Detected suspicious URL” without API.
+Demo Script (for judges)
+Launch the app UI (explain roles: “This is our Email Threat & Forensics system”).
+Paste or upload sample email that includes an image attachment (or QR code screenshot).
+Click “Run Analysis.” Show the screen updating.
+Explain output:
+Under “Image Analysis,” show that a QR was found and decoded.
+If OCR text was present, highlight it.
+Show any warnings (e.g. “⚠ This QR directs to a known phishing site (as flagged by VirusTotal)”).
+Risk scoring: Point out how this module’s findings (e.g. “Suspicious QR link”) are combined in the final risk summary (judges see “High Risk – QR Malicious”).
+Generate report: Click “Download PDF.” Show the PDF containing an “Image Forensics” section listing the QR codes and OCR text.
+Conclude: “This module automatically checks any images in the email for QR codes and hidden messages, providing concrete evidence for why an email is flagged.”
+Integration Checklist
+ Pull code from teammates: Obtain Member 4’s existing QR code script (if any) and understand input/output.
+ Define interfaces: Confirm how image data is passed (file path, bytes, etc.) and what JSON fields all modules should share.
+ Set up environment: Install pyzbar, OpenCV, Pillow, Tesseract (if used), requests.
+ Implement scan_image(): Combine library calls (e.g. use PyZbar first, fallback to OpenCV if needed).
+ Error handling: Wrap calls in try/except, populate errors.
+ Test locally: Use the sample test cases above to verify outputs and tweak thresholds.
+ Integrate with main app: Import and call the function in the Streamlit workflow. Display results in the UI.
+ Finalize output format: Ensure the JSON from this module matches what the main app and report generator expect.
+ Documentation: In README, note any setup steps (e.g. install Tesseract, API keys).
+Following this plan will yield a robust QR/Image Scanner module that fits smoothly into the hackathon project and provides explainable forensic results.
+
+Sources: We based library choices on official docs and benchmarks. These confirm performance, ease of use, and integration options.
