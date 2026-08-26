@@ -188,6 +188,14 @@
 .status-neutral { color: hsl(var(--muted-foreground)); background: hsl(var(--muted)); }
 .finding-row { border-top: 1px solid hsl(var(--border)); transition: background .2s; }
 .finding-row:hover { background: hsl(var(--muted) / .5); }
+.archive-hero { background: linear-gradient(120deg, hsl(var(--card)), hsl(var(--primary) / .07)); }
+.archive-hero-inner { display: flex; align-items: center; justify-content: space-between; gap: 28px; padding: clamp(24px, 4vw, 40px); }
+.archive-count { min-width: 128px; display: flex; flex-direction: column; align-items: center; padding: 18px; border-left: 1px solid hsl(var(--border)); }
+.archive-row { border-top: 1px solid hsl(var(--border)); transition: background .2s; }
+.archive-row:hover { background: hsl(var(--muted) / .52); }
+.archive-empty-mark { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 16px; color: hsl(var(--primary)); background: hsl(var(--primary) / .1); border: 1px solid hsl(var(--primary) / .16); }
+.icon-button { transition: color .2s, background .2s, transform .2s; }
+.icon-button:hover { color: hsl(var(--destructive)); background: hsl(var(--destructive) / .1); transform: translateY(-1px); }
 .preview-frame { background: #dfe2dc; background-image: radial-gradient(circle at 22% 18%, rgba(255,255,255,.75), transparent 28%), linear-gradient(135deg, #d6dcd3, #aebbb3); }
 .preview-frame img { max-height: 370px; object-fit: contain; }
 .skeleton { background: linear-gradient(90deg, hsl(var(--muted)) 25%, hsl(var(--card)) 50%, hsl(var(--muted)) 75%); background-size: 200% 100%; animation: shimmer 1.3s infinite; }
@@ -213,5 +221,7 @@
   .mobile-brand { display: flex !important; }
   .workspace-grid { grid-template-columns: 1fr !important; }
   .report-grid { grid-template-columns: 1fr !important; }
+  .archive-hero-inner { align-items: flex-start; flex-direction: column; }
+  .archive-count { align-items: flex-start; border-left: 0; border-top: 1px solid hsl(var(--border)); padding: 18px 0 0; width: 100%; }
 }
 .mobile-brand { display: none; }

@@ -1,10 +1,12 @@
 import { useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowUpRight,
   Archive,
   Check,
   CheckCircle2,
   Clipboard,
+  Clock3,
   Download,
   FileImage,
   FileJson,
@@ -16,6 +18,7 @@ import {
   ScanLine,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Type,
   UploadCloud,
   X,
@@ -45,8 +48,16 @@ type Report = {
   signals: { label: string; detail: string; level: FindingLevel }[];
 };
 
+type ArchiveRecord = {
+  id: string;
+  archivedAt: string;
+  report: Report;
+};
+
 type BrowserBarcode = { rawValue?: string; format?: string };
 type BrowserBarcodeDetector = new () => { detect: (source: CanvasImageSource) => Promise<BrowserBarcode[]> };
+
+const ARCHIVE_KEY = 'signal-evidence-archive';
 
 const sampleReport: Report = {
   fileName: 'message-from-vendor.png',
@@ -66,6 +77,17 @@ const sampleReport: Report = {
     { label: 'Image integrity', detail: 'No embedded script or macro detected', level: 'clear' },
   ],
 };
+
+function readArchive(): ArchiveRecord[] {
+  try {
+    const stored = window.localStorage.getItem(ARCHIVE_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored) as ArchiveRecord[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -126,7 +148,7 @@ function FauxQr() {
   );
 }
 
-function Rail({ onReset }: { onReset: () => void }) {
+function Rail({ view, archiveCount, onReset, onOpenArchive }: { view: 'inspect' | 'archive'; archiveCount: number; onReset: () => void; onOpenArchive: () => void }) {
   return (
     <aside className="side-rail">
       <div className="flex items-center gap-3 px-2">
@@ -139,12 +161,13 @@ function Rail({ onReset }: { onReset: () => void }) {
       <div className="mt-12">
         <div className="eyebrow px-3 text-[#8fa49a]">Workspace</div>
         <nav className="mt-3 space-y-1" aria-label="Workspace navigation">
-          <button className="rail-link active flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm" data-testid="button-nav-inspect" onClick={onReset}>
+          <button className={`rail-link flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${view === 'inspect' ? 'active' : ''}`} data-testid="button-nav-inspect" onClick={onReset}>
             <ScanLine size={16} /> <span>Inspect image</span>
-            <span className="ml-auto h-1.5 w-1.5 rounded-full bg-[#e4a85e] pulse-dot" />
+            {view === 'inspect' && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-[#e4a85e] pulse-dot" />}
           </button>
-          <button className="rail-link flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm" data-testid="button-nav-archive" onClick={() => window.alert('Local archive is intentionally empty. Export reports to retain evidence.')}>
+          <button className={`rail-link flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${view === 'archive' ? 'active' : ''}`} data-testid="button-nav-archive" onClick={onOpenArchive}>
             <Archive size={16} /> <span>Local archive</span>
+            {archiveCount > 0 && <span className="ml-auto mono text-[10px] text-[#b9c9bd]">{archiveCount}</span>}
           </button>
         </nav>
       </div>
@@ -162,7 +185,7 @@ function Rail({ onReset }: { onReset: () => void }) {
   );
 }
 
-function Topbar({ hasReport, onReset }: { hasReport: boolean; onReset: () => void }) {
+function Topbar({ hasReport, view, onReset }: { hasReport: boolean; view: 'inspect' | 'archive'; onReset: () => void }) {
   return (
     <header className="topbar">
       <div className="mobile-brand items-center gap-2">
@@ -175,7 +198,7 @@ function Topbar({ hasReport, onReset }: { hasReport: boolean; onReset: () => voi
           <span className="mono text-[10px] tracking-[.12em] text-muted-foreground">BROWSER RUNTIME READY</span>
         </div>
         <span className="h-4 w-px bg-border" />
-        <span className="mono text-[10px] text-muted-foreground">CASE / UNASSIGNED</span>
+        <span className="mono text-[10px] text-muted-foreground">{view === 'archive' ? 'ARCHIVE / LOCAL' : 'CASE / UNASSIGNED'}</span>
       </div>
       <button onClick={onReset} className="button-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold" data-testid="button-clear-desk">
         <RefreshCw size={14} /> <span>{hasReport ? 'Clear desk' : 'New inspection'}</span>
@@ -291,6 +314,68 @@ function EmptyReport() {
   );
 }
 
+function ArchiveView({ entries, onOpen, onDelete, onClear }: { entries: ArchiveRecord[]; onOpen: (entry: ArchiveRecord) => void; onDelete: (id: string) => void; onClear: () => void }) {
+  return (
+    <div className="space-y-5">
+      <section className="archive-hero soft-card reveal overflow-hidden">
+        <div className="archive-hero-inner">
+          <div>
+            <div className="eyebrow flex items-center gap-2 text-primary"><Archive size={13} /> Browser-local history</div>
+            <h1 className="mt-3 text-3xl font-extrabold tracking-[-.05em]">Keep the evidence trail close.</h1>
+            <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground">Saved reports live only in this browser. Image bytes are never stored here, so the archive keeps the findings and metadata you need without keeping the original file.</p>
+          </div>
+          <div className="archive-count">
+            <span className="metric-number text-primary">{entries.length}</span>
+            <span className="mono mt-1 text-[9px] tracking-[.1em] text-muted-foreground">SAVED REPORTS</span>
+          </div>
+        </div>
+      </section>
+
+      {entries.length === 0 ? (
+        <section className="soft-card paper-grid flex min-h-[380px] flex-col items-center justify-center p-8 text-center reveal reveal-delay-1">
+          <div className="archive-empty-mark"><Archive size={24} /></div>
+          <div className="eyebrow mt-5 text-primary">No saved reports yet</div>
+          <h2 className="mt-2 text-2xl font-extrabold tracking-[-.04em]">Your review history will appear here.</h2>
+          <p className="mt-2 max-w-md text-sm leading-relaxed text-muted-foreground">Run an inspection from the workspace and its report will be saved automatically. Only the result is retained—never the image.</p>
+          <div className="mt-6 flex items-center gap-2 text-xs font-bold text-primary"><ScanLine size={14} /> Return to Inspect image to begin</div>
+        </section>
+      ) : (
+        <section className="soft-card reveal reveal-delay-1 overflow-hidden">
+          <div className="flex items-center justify-between border-b border-border px-5 py-4">
+            <div><div className="eyebrow">Saved findings</div><h2 className="mt-1 text-sm font-extrabold">Recent inspections</h2></div>
+            <button onClick={onClear} className="button-secondary inline-flex items-center gap-2 rounded-md px-2.5 py-2 text-[10px] font-bold text-muted-foreground" data-testid="button-clear-archive"><Trash2 size={13} /> Clear archive</button>
+          </div>
+          <div>
+            {entries.map((entry) => (
+              <div className="archive-row group flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between" key={entry.id} data-testid={`archive-entry-${entry.id}`}>
+                <button onClick={() => onOpen(entry)} className="min-w-0 flex-1 text-left" data-testid={`button-open-archive-${entry.id}`}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <RiskBadge level={entry.report.level} />
+                    {entry.report.source === 'sample' && <span className="rounded-full bg-[#e9ddc8] px-2 py-1 text-[10px] font-bold text-[#8f5a26]">SAMPLE DATA</span>}
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <FileImage size={15} className="shrink-0 text-primary" />
+                    <span className="truncate text-sm font-extrabold">{entry.report.fileName}</span>
+                    <ArrowUpRight size={14} className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                  </div>
+                  <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{entry.report.summary}</p>
+                </button>
+                <div className="flex shrink-0 items-center gap-4 sm:pl-4">
+                  <div className="text-left sm:text-right">
+                    <div className="flex items-center gap-1.5 mono text-[10px] text-muted-foreground"><Clock3 size={12} /> {entry.archivedAt}</div>
+                    <div className="mt-1 mono text-[10px] text-muted-foreground">{entry.report.qr.length} payload{entry.report.qr.length === 1 ? '' : 's'} · risk {entry.report.score}</div>
+                  </div>
+                  <button onClick={() => onDelete(entry.id)} className="icon-button rounded-md p-2 text-muted-foreground" aria-label={`Delete ${entry.report.fileName} from archive`} data-testid={`button-delete-archive-${entry.id}`}><Trash2 size={14} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 function RiskBadge({ level }: { level: FindingLevel }) {
   return level === 'clear'
     ? <span className="status-clean inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-bold"><CheckCircle2 size={12} /> Clear</span>
@@ -372,6 +457,8 @@ function ReportView({ report, onExport, onCopy }: { report: Report; onExport: ()
 
 function Home() {
   const [report, setReport] = useState<Report | null>(null);
+  const [view, setView] = useState<'inspect' | 'archive'>('inspect');
+  const [archiveEntries, setArchiveEntries] = useState<ArchiveRecord[]>(readArchive);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState('');
@@ -387,6 +474,22 @@ function Home() {
     setError('');
     setProgress(0);
     setIsScanning(false);
+    setView('inspect');
+  };
+
+  const saveToArchive = (nextReport: Report) => {
+    const nextEntry: ArchiveRecord = {
+      id: `${Date.now()}-${nextReport.source}-${nextReport.fileName}`,
+      archivedAt: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+      report: nextReport,
+    };
+    const nextEntries = [nextEntry, ...archiveEntries].slice(0, 25);
+    setArchiveEntries(nextEntries);
+    try {
+      window.localStorage.setItem(ARCHIVE_KEY, JSON.stringify(nextEntries));
+    } catch {
+      setError('Report ready, but this browser could not save a local archive copy.');
+    }
   };
 
   const makeReport = async (nextFile: File) => {
@@ -419,7 +522,7 @@ function Home() {
         setIsScanning(false);
         const hasCode = localCodes.length > 0;
         const hasShortUrl = localCodes.some((code) => /t\.ly|bit\.ly|tinyurl|shorturl/i.test(code.payload));
-        setReport({
+        const nextReport: Report = {
           fileName: nextFile.name,
           size: formatBytes(nextFile.size),
           dimensions,
@@ -441,7 +544,9 @@ function Home() {
             { label: 'Image integrity', detail: 'Image loaded and rendered without a browser decoding error', level: 'clear' },
             { label: 'Network activity', detail: 'No upload or remote lookup performed', level: 'clear' },
           ],
-        });
+        };
+        setReport(nextReport);
+        saveToArchive(nextReport);
       }, 260);
     }, 1450);
   };
@@ -459,7 +564,7 @@ function Home() {
       setProgress(current);
       if (current >= 100) {
         window.clearInterval(timer);
-        window.setTimeout(() => { setIsScanning(false); setReport(sampleReport); }, 240);
+        window.setTimeout(() => { setIsScanning(false); setReport(sampleReport); saveToArchive(sampleReport); }, 240);
       }
     }, 180);
   };
@@ -481,25 +586,51 @@ function Home() {
     setError('Report copied to clipboard.');
     window.setTimeout(() => setError(''), 2200);
   };
+  const openArchive = (entry: ArchiveRecord) => {
+    setReport(entry.report);
+    setFile(null);
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+    setView('inspect');
+    setError('');
+  };
+  const deleteArchiveEntry = (id: string) => {
+    const nextEntries = archiveEntries.filter((entry) => entry.id !== id);
+    setArchiveEntries(nextEntries);
+    try {
+      window.localStorage.setItem(ARCHIVE_KEY, JSON.stringify(nextEntries));
+    } catch {
+      setError('The archive could not be updated in this browser.');
+    }
+  };
+  const clearArchive = () => {
+    if (!window.confirm('Clear all locally saved reports? This cannot be undone.')) return;
+    setArchiveEntries([]);
+    try {
+      window.localStorage.removeItem(ARCHIVE_KEY);
+    } catch {
+      setError('The archive could not be cleared in this browser.');
+    }
+  };
 
   return (
     <div className="noise app-shell">
-      <Rail onReset={reset} />
+      <Rail view={view} archiveCount={archiveEntries.length} onReset={reset} onOpenArchive={() => { setView('archive'); setError(''); }} />
       <div className="workspace">
-        <Topbar hasReport={Boolean(report || isScanning)} onReset={reset} />
+        <Topbar hasReport={Boolean(report || isScanning)} view={view} onReset={reset} />
         <main className="content-wrap">
-          <section className="mb-8 flex flex-col justify-between gap-6 border-b border-border pb-8 lg:flex-row lg:items-end">
+          {view === 'inspect' && <section className="mb-8 flex flex-col justify-between gap-6 border-b border-border pb-8 lg:flex-row lg:items-end">
             <div className="reveal">
               <div className="eyebrow flex items-center gap-2 text-primary"><span className="h-1.5 w-1.5 rounded-full bg-[#438b7d]" /> Private inspection workspace</div>
               <h1 className="display-title mt-4">Make the image<br /><span className="text-primary">answerable.</span></h1>
               <p className="mt-5 max-w-xl text-sm leading-relaxed text-muted-foreground">Decode suspicious QR and barcode payloads, make visible text legible, and leave with a report your team can verify.</p>
             </div>
             <div className="reveal reveal-delay-1 max-w-xs lg:pb-1"><div className="flex items-start gap-3"><div className="mt-0.5 text-primary"><ShieldCheck size={18} strokeWidth={1.6} /></div><p className="text-xs leading-relaxed text-muted-foreground"><strong className="font-bold text-foreground">Evidence stays close.</strong> Signal uses local browser capabilities first and tells you when a capability is unavailable.</p></div></div>
-          </section>
+          </section>}
 
           {error && <div className={`mb-4 flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-xs reveal ${error.includes('copied') ? 'border-primary/25 bg-primary/8 text-primary' : 'border-destructive/25 bg-destructive/8 text-destructive'}`} role="status" data-testid="status-message"><div className="flex items-center gap-2">{error.includes('copied') ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />} {error}</div><button onClick={() => setError('')} data-testid="button-dismiss-status"><X size={15} /></button></div>}
 
-          <div className="workspace-grid grid grid-cols-[minmax(270px,340px)_minmax(0,1fr)] items-start gap-5">
+          {view === 'archive' ? <ArchiveView entries={archiveEntries} onOpen={openArchive} onDelete={deleteArchiveEntry} onClear={clearArchive} /> : <div className="workspace-grid grid grid-cols-[minmax(270px,340px)_minmax(0,1fr)] items-start gap-5">
             <aside className="space-y-4">
               <section className="soft-card p-4 reveal reveal-delay-1">
                 <div className="mb-4 flex items-center justify-between"><div><div className="eyebrow">01 / Intake</div><h2 className="mt-1 text-sm font-extrabold">Bring in evidence</h2></div><UploadCloud size={16} className="text-muted-foreground" /></div>
@@ -513,7 +644,7 @@ function Home() {
               {!isScanning && report && <ReportView report={report} onExport={exportReport} onCopy={copyReport} />}
               {!isScanning && !report && <EmptyReport />}
             </div>
-          </div>
+          </div>}
         </main>
       </div>
     </div>
