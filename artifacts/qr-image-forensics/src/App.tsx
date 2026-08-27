@@ -33,7 +33,21 @@ import { Route, Switch, Router as WouterRouter } from 'wouter';
 const queryClient = new QueryClient();
 
 type FindingLevel = 'clear' | 'review';
+type RiskLevel = 'LOW RISK' | 'SUSPICIOUS' | 'HIGH RISK' | 'INSUFFICIENT EVIDENCE';
+type QrFinding = {
+  type: string;
+  payload: string;
+  category: string;
+  confidence: string;
+  indicators: string[];
+  coords?: [number, number, number, number];
+};
+type TimelineEvent = {
+  label: string;
+  detail: string;
+};
 type Report = {
+  caseId: string;
   fileName: string;
   size: string;
   dimensions: string;
@@ -41,11 +55,20 @@ type Report = {
   analyzedAt: string;
   source: 'uploaded' | 'sample';
   level: FindingLevel;
+  riskLevel: RiskLevel;
   score: number;
+  riskFactors: number;
   summary: string;
-  qr: { type: string; payload: string; confidence: string }[];
+  interpretation: string;
+  qr: QrFinding[];
   text: string;
   signals: { label: string; detail: string; level: FindingLevel }[];
+  timeline: TimelineEvent[];
+  processing: {
+    localOnly: boolean;
+    networkActivity: 'none';
+    detectionPath: string;
+  };
 };
 
 type ArchiveRecord = {
@@ -54,12 +77,59 @@ type ArchiveRecord = {
   report: Report;
 };
 
-type BrowserBarcode = { rawValue?: string; format?: string };
+type BrowserBarcode = { rawValue?: string; format?: string; boundingBox?: { x: number; y: number; width: number; height: number } };
 type BrowserBarcodeDetector = new () => { detect: (source: CanvasImageSource) => Promise<BrowserBarcode[]> };
 
 const ARCHIVE_KEY = 'signal-evidence-archive';
 
+function payloadCategory(payload: string) {
+  if (/^(https?|ftp):\/\//i.test(payload)) return 'URL';
+  if (/^(upi:\/\/|upi:|paytmmp:\/\/)/i.test(payload) || /(?:^|[?&])pa=[^&]+/i.test(payload)) return 'UPI payment';
+  if (/^mailto:/i.test(payload)) return 'Email';
+  return 'Plain text';
+}
+
+function payloadIndicators(payload: string) {
+  const indicators: string[] = [];
+  if (/t\.ly|bit\.ly|tinyurl|shorturl|ow\.ly|is\.gd/i.test(payload)) indicators.push('Shortened URL');
+  try {
+    const url = new URL(payload);
+    if (url.hostname.includes('xn--')) indicators.push('Punycode destination');
+    if (url.hostname.split('.').length > 3) indicators.push('Deep subdomain');
+  } catch {
+    // Non-URL payloads do not have URL indicators.
+  }
+  return indicators;
+}
+
+function deriveAssessment(qr: QrFinding[], actionLanguage = false) {
+  const indicators = qr.flatMap((item) => item.indicators);
+  const score = qr.length === 0
+    ? 8
+    : Math.min(100, qr.length * 12 + indicators.length * 38 + (actionLanguage ? 11 : 0));
+  const riskLevel: RiskLevel = qr.length === 0
+    ? 'INSUFFICIENT EVIDENCE'
+    : indicators.length >= 2 || score >= 75
+      ? 'HIGH RISK'
+      : indicators.length > 0
+        ? 'SUSPICIOUS'
+        : 'LOW RISK';
+  const level: FindingLevel = riskLevel === 'LOW RISK' ? 'clear' : 'review';
+  return { score, riskLevel, level, riskFactors: indicators.length + (actionLanguage ? 1 : 0) };
+}
+
+function buildInterpretation(qr: QrFinding[], riskLevel: RiskLevel) {
+  if (qr.length === 0) {
+    return `Observed evidence: no QR or barcode payload surfaced through the available browser scan path. System interpretation: there is insufficient evidence to assign a higher risk level, and this negative result is not proof that the image is safe.`;
+  }
+  const first = qr[0];
+  const indicators = [...new Set(qr.flatMap((item) => item.indicators))];
+  const indicatorText = indicators.length ? ` The local checks surfaced: ${indicators.join(', ')}.` : ' No suspicious URL indicators surfaced through the available local checks.';
+  return `Observed evidence: ${qr.length} ${qr.length === 1 ? 'machine-readable payload was' : 'machine-readable payloads were'} decoded, including a ${first.type} carrying a ${first.category} value.${indicatorText} System interpretation: this result is classified as ${riskLevel.toLowerCase()} from observable structure only; no independent malicious verdict was confirmed.`;
+}
+
 const sampleReport: Report = {
+  caseId: 'SAMPLE-2048',
   fileName: 'message-from-vendor.png',
   size: '182 KB',
   dimensions: '1200 × 900 px',
@@ -67,23 +137,73 @@ const sampleReport: Report = {
   analyzedAt: 'Today, 14:32:08 UTC',
   source: 'sample',
   level: 'review',
+  riskLevel: 'SUSPICIOUS',
   score: 61,
-  summary: 'A QR payload was found. The destination uses a URL shortener, so verify the final destination before opening it.',
-  qr: [{ type: 'QR Code', payload: 'https://t.ly/4mQ7a', confidence: '98.4%' }],
+  riskFactors: 2,
+  summary: 'A QR payload was decoded, but its shortened destination and urgent action language require investigation before opening it.',
+  interpretation: 'Observed evidence: one QR Code decoded a URL using the t.ly shortener, and the visible text includes “URGENT”. System interpretation: those two observable signals increase uncertainty about the final destination. No independent malicious verdict was confirmed, so this result is classified as suspicious rather than definitively malicious.',
+  qr: [{ type: 'QR Code', payload: 'https://t.ly/4mQ7a', category: 'URL', confidence: '98.4%', indicators: ['Shortened URL'] }],
   text: 'URGENT: Review the attached invoice\nVendor Services · INV-2048\nScan to view secure document',
   signals: [
     { label: 'Shortened destination', detail: 't.ly obscures the final host', level: 'review' },
     { label: 'Action language', detail: '“URGENT” creates time pressure', level: 'review' },
     { label: 'Image integrity', detail: 'No embedded script or macro detected', level: 'clear' },
   ],
+  timeline: [
+    { label: 'Evidence received', detail: 'Synthetic sample image loaded' },
+    { label: 'Content detected', detail: 'One QR Code and visible text surfaced' },
+    { label: 'Payload decoded', detail: 'URL payload decoded with 98.4% confidence' },
+    { label: 'Indicators analyzed', detail: 'Shortened URL and urgent action language observed' },
+    { label: 'Risk calculated', detail: '61 / 100 — SUSPICIOUS' },
+    { label: 'Report generated', detail: 'Structured local report ready for export' },
+  ],
+  processing: { localOnly: true, networkActivity: 'none', detectionPath: 'Synthetic sample path' },
 };
+
+function normalizeReport(raw: Report): Report {
+  const legacy = raw as unknown as Partial<Report> & { qr?: Array<Partial<QrFinding>> };
+  const qr: QrFinding[] = (legacy.qr || []).map((item) => {
+    const payload = item.payload || '';
+    return {
+      type: item.type || 'Barcode',
+      payload,
+      category: item.category || payloadCategory(payload),
+      confidence: item.confidence || 'Not available',
+      indicators: item.indicators || payloadIndicators(payload),
+      ...(item.coords ? { coords: item.coords } : {}),
+    };
+  });
+  const assessment = deriveAssessment(qr);
+  const riskLevel = legacy.riskLevel || assessment.riskLevel;
+  return {
+    ...raw,
+    caseId: legacy.caseId || 'ARCHIVED-LEGACY',
+    fileName: legacy.fileName || 'Archived image',
+    size: legacy.size || 'Not available',
+    dimensions: legacy.dimensions || 'Not available',
+    format: legacy.format || 'Image',
+    analyzedAt: legacy.analyzedAt || 'Previously analyzed',
+    source: legacy.source || 'uploaded',
+    level: legacy.level || assessment.level,
+    riskLevel,
+    score: typeof legacy.score === 'number' ? legacy.score : assessment.score,
+    riskFactors: typeof legacy.riskFactors === 'number' ? legacy.riskFactors : assessment.riskFactors,
+    summary: legacy.summary || 'This archived report contains a previously observed result.',
+    interpretation: legacy.interpretation || buildInterpretation(qr, riskLevel),
+    qr,
+    text: legacy.text || '',
+    signals: legacy.signals || [],
+    timeline: legacy.timeline || [],
+    processing: legacy.processing || { localOnly: true, networkActivity: 'none', detectionPath: 'Archived local report' },
+  };
+}
 
 function readArchive(): ArchiveRecord[] {
   try {
     const stored = window.localStorage.getItem(ARCHIVE_KEY);
     if (!stored) return [];
     const parsed = JSON.parse(stored) as ArchiveRecord[];
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map((entry) => ({ ...entry, report: normalizeReport(entry.report) })) : [];
   } catch {
     return [];
   }
@@ -131,7 +251,10 @@ async function detectLocalCodes(file: File) {
     return codes.filter((code) => code.rawValue).map((code) => ({
       type: code.format === 'qr_code' ? 'QR Code' : (code.format || 'Barcode').replace('_', ' '),
       payload: code.rawValue as string,
+      category: payloadCategory(code.rawValue as string),
       confidence: 'Browser detected',
+      indicators: payloadIndicators(code.rawValue as string),
+      ...(code.boundingBox ? { coords: [code.boundingBox.x, code.boundingBox.y, code.boundingBox.width, code.boundingBox.height] as [number, number, number, number] } : {}),
     }));
   } catch {
     return [];
@@ -247,6 +370,7 @@ function FileDrop({ onFile, onDemo, dragging, setDragging }: { onFile: (file: Fi
 
 function MetaList({ report }: { report: Report }) {
   const values = [
+    ['Case ID', report.caseId],
     ['Source', report.source === 'sample' ? 'Synthetic sample' : 'Local upload'],
     ['File type', report.format],
     ['File size', report.size],
@@ -350,7 +474,7 @@ function ArchiveView({ entries, onOpen, onDelete, onClear }: { entries: ArchiveR
               <div className="archive-row group flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between" key={entry.id} data-testid={`archive-entry-${entry.id}`}>
                 <button onClick={() => onOpen(entry)} className="min-w-0 flex-1 text-left" data-testid={`button-open-archive-${entry.id}`}>
                   <div className="flex flex-wrap items-center gap-2">
-                    <RiskBadge level={entry.report.level} />
+                    <RiskBadge level={entry.report.level} riskLevel={entry.report.riskLevel} />
                     {entry.report.source === 'sample' && <span className="rounded-full bg-[#e9ddc8] px-2 py-1 text-[10px] font-bold text-[#8f5a26]">SAMPLE DATA</span>}
                   </div>
                   <div className="mt-2 flex items-center gap-2">
@@ -363,7 +487,7 @@ function ArchiveView({ entries, onOpen, onDelete, onClear }: { entries: ArchiveR
                 <div className="flex shrink-0 items-center gap-4 sm:pl-4">
                   <div className="text-left sm:text-right">
                     <div className="flex items-center gap-1.5 mono text-[10px] text-muted-foreground"><Clock3 size={12} /> {entry.archivedAt}</div>
-                    <div className="mt-1 mono text-[10px] text-muted-foreground">{entry.report.qr.length} payload{entry.report.qr.length === 1 ? '' : 's'} · risk {entry.report.score}</div>
+                    <div className="mt-1 mono text-[10px] text-muted-foreground">{entry.report.qr.length} payload{entry.report.qr.length === 1 ? '' : 's'} · {entry.report.score} / 100</div>
                   </div>
                   <button onClick={() => onDelete(entry.id)} className="icon-button rounded-md p-2 text-muted-foreground" aria-label={`Delete ${entry.report.fileName} from archive`} data-testid={`button-delete-archive-${entry.id}`}><Trash2 size={14} /></button>
                 </div>
@@ -376,37 +500,49 @@ function ArchiveView({ entries, onOpen, onDelete, onClear }: { entries: ArchiveR
   );
 }
 
-function RiskBadge({ level }: { level: FindingLevel }) {
-  return level === 'clear'
-    ? <span className="status-clean inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-bold"><CheckCircle2 size={12} /> Clear</span>
-    : <span className="status-attention inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-bold"><AlertTriangle size={12} /> Review</span>;
+function RiskBadge({ level, riskLevel }: { level: FindingLevel; riskLevel?: RiskLevel }) {
+  const label = riskLevel || (level === 'clear' ? 'LOW RISK' : 'REQUIRES INVESTIGATION');
+  const attention = label === 'SUSPICIOUS' || label === 'HIGH RISK' || label === 'REQUIRES INVESTIGATION';
+  return attention
+    ? <span className="status-attention inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-bold"><AlertTriangle size={12} /> {label}</span>
+    : <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-bold ${label === 'INSUFFICIENT EVIDENCE' ? 'status-neutral' : 'status-clean'}`}><CheckCircle2 size={12} /> {label}</span>;
 }
 
 function ReportView({ report, onExport, onCopy }: { report: Report; onExport: () => void; onCopy: () => void }) {
+  const attention = report.riskLevel === 'SUSPICIOUS' || report.riskLevel === 'HIGH RISK';
   return (
     <div className="space-y-4">
-      <section className={`soft-card reveal overflow-hidden border-l-4 ${report.level === 'clear' ? 'border-l-primary' : 'border-l-[#bb6a4d]'}`}>
+      <section className={`soft-card verdict-card reveal overflow-hidden border-l-4 ${attention ? 'border-l-[#bb6a4d]' : 'border-l-primary'}`}>
         <div className="flex flex-col gap-5 p-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-4">
-            <div className={`mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-xl ${report.level === 'clear' ? 'status-clean' : 'status-attention'}`}>
-              {report.level === 'clear' ? <ShieldCheck size={23} strokeWidth={1.7} /> : <AlertTriangle size={23} strokeWidth={1.7} />}
+            <div className={`mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-xl ${attention ? 'status-attention' : report.riskLevel === 'INSUFFICIENT EVIDENCE' ? 'status-neutral' : 'status-clean'}`}>
+              {attention ? <AlertTriangle size={23} strokeWidth={1.7} /> : <ShieldCheck size={23} strokeWidth={1.7} />}
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <RiskBadge level={report.level} />
+                <span className="eyebrow text-primary">Final verdict</span>
                 {report.source === 'sample' && <span className="rounded-full bg-[#e9ddc8] px-2 py-1 text-[10px] font-bold text-[#8f5a26]">SAMPLE DATA</span>}
               </div>
-              <h2 className="mt-2 text-xl font-extrabold tracking-[-.04em]" data-testid="text-risk-summary">{report.level === 'clear' ? 'No immediate risk signals' : 'One payload deserves a closer look'}</h2>
+              <h2 className="mt-2 text-xl font-extrabold tracking-[-.04em]" data-testid="text-risk-summary">{report.riskLevel}</h2>
               <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">{report.summary}</p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-3 sm:pl-4">
             <div className="text-center">
-              <div className="metric-number text-primary" data-testid="text-risk-score">{report.score}</div>
-              <div className="mono mt-1 text-[9px] tracking-[.08em] text-muted-foreground">RISK INDEX</div>
+              <div className="risk-score text-primary" data-testid="text-risk-score">{report.score} <span>/ 100 — {report.riskLevel}</span></div>
+              <div className="mt-1 text-[10px] text-muted-foreground">{report.riskFactors} risk factor{report.riskFactors === 1 ? '' : 's'} detected</div>
             </div>
             <div className="h-12 w-px bg-border" />
             <button onClick={onExport} className="button-primary inline-flex items-center gap-2 rounded-lg px-3.5 py-2.5 text-xs font-bold" data-testid="button-export-report"><Download size={15} /> Export JSON</button>
+          </div>
+        </div>
+      </section>
+      <section className="soft-card interpretation-card reveal reveal-delay-1 p-5">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"><Info size={15} /></div>
+          <div>
+            <div className="eyebrow text-primary">System interpretation</div>
+            <p className="mt-2 text-sm leading-relaxed text-foreground">{report.interpretation}</p>
           </div>
         </div>
       </section>
@@ -415,24 +551,29 @@ function ReportView({ report, onExport, onCopy }: { report: Report; onExport: ()
         <div className="space-y-4">
           <section className="soft-card reveal reveal-delay-1 overflow-hidden">
             <div className="flex items-center justify-between border-b border-border px-5 py-4">
-              <div className="flex items-center gap-2.5"><ScanLine size={16} className="text-primary" /><h3 className="text-sm font-extrabold">QR & barcode findings</h3></div>
+              <div><div className="flex items-center gap-2.5"><ScanLine size={16} className="text-primary" /><h3 className="text-sm font-extrabold">Observed evidence</h3></div><p className="mt-1 text-[11px] text-muted-foreground">QR & barcode findings from this image</p></div>
               <span className="mono text-[10px] text-muted-foreground">{report.qr.length} detected</span>
             </div>
             {report.qr.length ? report.qr.map((item, index) => (
               <div key={`${item.payload}-${index}`} className="finding-row p-5" data-testid={`finding-qr-${index}`}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2"><span className="rounded bg-secondary px-2 py-1 mono text-[10px]">{item.type}</span><span className="text-[11px] text-muted-foreground">Confidence {item.confidence}</span></div>
+                  <div className="flex flex-wrap items-center gap-2"><span className="rounded bg-secondary px-2 py-1 mono text-[10px]">{item.type}</span><span className="rounded bg-secondary px-2 py-1 mono text-[10px]">Payload: {item.category}</span><span className="text-[11px] text-muted-foreground">Confidence {item.confidence}</span></div>
                   <button onClick={() => navigator.clipboard?.writeText(item.payload)} className="button-secondary inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold" data-testid={`button-copy-payload-${index}`}><Clipboard size={12} /> Copy</button>
                 </div>
-                <div className="mt-4 break-all rounded-lg bg-[#20343a] px-4 py-3 mono text-xs text-[#e8d9bd]" data-testid={`text-payload-${index}`}>{item.payload}</div>
-                {report.level === 'review' && <div className="mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-[#a4662b]"><Info size={14} className="mt-0.5 shrink-0" /> Short URLs hide the final destination. Resolve in an isolated environment before visiting.</div>}
+                <div className="mt-4 eyebrow text-primary">Decoded payload</div>
+                <div className="mt-2 break-all rounded-lg bg-[#20343a] px-4 py-3 mono text-xs text-[#e8d9bd]" data-testid={`text-payload-${index}`}>{item.payload}</div>
+                <div className="mt-4">
+                  <div className="eyebrow">Suspicious indicators</div>
+                  {item.indicators.length ? <div className="mt-2 flex flex-wrap gap-2">{item.indicators.map((indicator) => <span className="indicator-chip" key={indicator}><AlertTriangle size={12} /> {indicator}</span>)}</div> : <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><Check size={13} className="text-primary" /> None surfaced by the available local checks.</div>}
+                </div>
+                {item.coords && <div className="mt-3 text-[10px] text-muted-foreground">Detected region: {item.coords.map((value) => Math.round(value)).join(', ')} px</div>}
               </div>
             )) : (
-              <div className="p-7 text-center"><div className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-secondary text-muted-foreground"><ScanLine size={18} /></div><p className="mt-3 text-sm font-bold">No QR or barcode detected</p><p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">This browser-only pass did not identify a machine-readable payload. A negative result is not proof that one is absent.</p></div>
+              <div className="p-7 text-center"><div className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-secondary text-muted-foreground"><ScanLine size={18} /></div><p className="mt-3 text-sm font-bold">No QR or barcode surfaced</p><p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">This is a valid negative result from the available browser scan path—not proof that the image is safe or that no code exists.</p></div>
             )}
           </section>
           <section className="soft-card reveal reveal-delay-2 overflow-hidden">
-            <div className="flex items-center justify-between border-b border-border px-5 py-4"><div className="flex items-center gap-2.5"><Type size={16} className="text-primary" /><h3 className="text-sm font-extrabold">Visible text</h3></div><span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-bold text-muted-foreground">{report.text ? 'Captured' : 'Not available'}</span></div>
+            <div className="flex items-center justify-between border-b border-border px-5 py-4"><div><div className="flex items-center gap-2.5"><Type size={16} className="text-primary" /><h3 className="text-sm font-extrabold">Observed text</h3></div><p className="mt-1 text-[11px] text-muted-foreground">Text surfaced from the current inspection</p></div><span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-bold text-muted-foreground">{report.text ? 'Captured' : 'Not available'}</span></div>
             <div className="p-5"><div className="min-h-[90px] whitespace-pre-line rounded-lg border border-border bg-background p-4 text-sm leading-relaxed text-foreground" data-testid="text-extracted-content">{report.text || 'No text extraction was run for this image.'}</div><p className="mt-3 text-[10px] leading-relaxed text-muted-foreground"><Info size={12} className="mr-1 inline-block align-[-2px]" /> Text is a visual aid, not a claim of document authenticity.</p></div>
           </section>
         </div>
@@ -450,6 +591,20 @@ function ReportView({ report, onExport, onCopy }: { report: Report; onExport: ()
           <button onClick={onCopy} className="button-secondary flex w-full items-center justify-center gap-2 rounded-lg px-3 py-3 text-xs font-bold reveal reveal-delay-3" data-testid="button-copy-report"><Clipboard size={15} /> Copy report to clipboard</button>
         </div>
       </div>
+      <section className="soft-card timeline-card reveal reveal-delay-3 overflow-hidden">
+        <div className="border-b border-border px-5 py-4">
+          <div className="flex items-center gap-2.5"><Clock3 size={16} className="text-primary" /><h3 className="text-sm font-extrabold">Investigation timeline</h3></div>
+          <p className="mt-1 text-[11px] text-muted-foreground">Sequence of events recorded during this inspection</p>
+        </div>
+        <div className="timeline-list grid gap-0 px-5 py-2 sm:grid-cols-2 lg:grid-cols-3">
+          {report.timeline.map((event, index) => (
+            <div className="timeline-event flex gap-3 py-4" key={`${event.label}-${index}`}>
+              <div className="timeline-marker">{String(index + 1).padStart(2, '0')}</div>
+              <div><div className="text-xs font-bold">{event.label}</div><p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{event.detail}</p></div>
+            </div>
+          ))}
+        </div>
+      </section>
       <div className="flex items-center gap-2 px-1 text-[10px] leading-relaxed text-muted-foreground"><ShieldCheck size={13} className="text-primary" /> This report describes observable signals in the image. It does not determine intent or guarantee safety.</div>
     </div>
   );
@@ -520,30 +675,54 @@ function Home() {
       setProgress(100);
       window.setTimeout(() => {
         setIsScanning(false);
-        const hasCode = localCodes.length > 0;
-        const hasShortUrl = localCodes.some((code) => /t\.ly|bit\.ly|tinyurl|shorturl/i.test(code.payload));
+          const hasCode = localCodes.length > 0;
+          const indicatorCount = localCodes.reduce((count, code) => count + code.indicators.length, 0);
+          const assessment = deriveAssessment(localCodes);
+          const detectionPath = (window as unknown as { BarcodeDetector?: BrowserBarcodeDetector }).BarcodeDetector
+            ? 'Browser Barcode Detection API'
+            : 'Barcode Detection API unavailable';
+          const indicatorSignals = localCodes.flatMap((code) => code.indicators.map((indicator) => ({
+            label: indicator,
+            detail: `Observed in the decoded ${code.category} payload`,
+            level: 'review' as FindingLevel,
+          })));
+          const summary = !hasCode
+            ? 'No QR or barcode payload surfaced in this browser-only pass. The result is insufficient evidence, not proof that the image is safe.'
+            : indicatorCount
+              ? `${localCodes[0].type} decoded a ${localCodes[0].category} payload with ${indicatorCount} suspicious indicator${indicatorCount === 1 ? '' : 's'}; review the destination before taking action.`
+              : `${localCodes[0].type} decoded a ${localCodes[0].category} payload. No suspicious indicators surfaced through the available local checks.`;
+          const analyzedAt = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
         const nextReport: Report = {
+            caseId: `SIG-${Date.now().toString(36).toUpperCase()}`,
           fileName: nextFile.name,
           size: formatBytes(nextFile.size),
           dimensions,
           format: `${nextFile.type.replace('image/', '').toUpperCase()} image`,
-          analyzedAt: new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' }),
+            analyzedAt,
           source: 'uploaded',
-          level: hasShortUrl ? 'review' : 'clear',
-          score: hasShortUrl ? 55 : hasCode ? 22 : 8,
-          summary: hasShortUrl
-            ? 'A machine-readable payload was found. The destination uses a URL shortener, so verify the final destination before opening it.'
-            : hasCode
-              ? 'A machine-readable payload was found locally. Review its destination or content before taking action.'
-              : 'No QR or barcode payload was surfaced in this browser-only pass. No immediate risk signal is present in the observable file data.',
+            level: assessment.level,
+            riskLevel: assessment.riskLevel,
+            score: assessment.score,
+            riskFactors: assessment.riskFactors,
+            summary,
+            interpretation: buildInterpretation(localCodes, assessment.riskLevel),
           qr: localCodes,
           text: '',
           signals: [
-            { label: 'Machine-readable payload', detail: hasCode ? 'Detected by the browser Barcode Detection API' : 'No QR or barcode detected by the available local scan path', level: hasCode ? 'review' : 'clear' },
-            ...(hasShortUrl ? [{ label: 'Shortened destination', detail: 'The final host is obscured behind a URL shortener', level: 'review' as FindingLevel }] : []),
+              { label: 'Machine-readable payload', detail: hasCode ? `${localCodes.length} payload${localCodes.length === 1 ? '' : 's'} detected by the available local scan path` : 'No QR or barcode surfaced through the available local scan path', level: hasCode && indicatorCount ? 'review' : 'clear' },
+              ...indicatorSignals,
             { label: 'Image integrity', detail: 'Image loaded and rendered without a browser decoding error', level: 'clear' },
             { label: 'Network activity', detail: 'No upload or remote lookup performed', level: 'clear' },
           ],
+            timeline: [
+              { label: 'Evidence received', detail: `${nextFile.name} loaded locally` },
+              { label: 'Content detected', detail: hasCode ? `${localCodes.length} machine-readable payload${localCodes.length === 1 ? '' : 's'} surfaced` : 'No QR or barcode surfaced' },
+              ...(hasCode ? [{ label: 'Payload decoded', detail: `${localCodes[0].type} decoded as ${localCodes[0].category}` }] : []),
+              { label: 'Indicators analyzed', detail: indicatorCount ? `${indicatorCount} suspicious indicator${indicatorCount === 1 ? '' : 's'} observed` : 'No suspicious indicators surfaced through local checks' },
+              { label: 'Risk calculated', detail: `${assessment.score} / 100 — ${assessment.riskLevel}` },
+              { label: 'Report generated', detail: 'Structured local report ready for export' },
+            ],
+            processing: { localOnly: true, networkActivity: 'none', detectionPath },
         };
         setReport(nextReport);
         saveToArchive(nextReport);
@@ -569,7 +748,31 @@ function Home() {
     }, 180);
   };
 
-  const reportJson = useMemo(() => report ? JSON.stringify({ ...report, generatedBy: 'Signal Evidence Desk', privacy: 'Processed locally in browser; no image upload performed.' }, null, 2) : '', [report]);
+  const reportJson = useMemo(() => report ? JSON.stringify({
+    generatedBy: 'Signal Evidence Desk',
+    schemaVersion: '1.0',
+    caseId: report.caseId,
+    fileMetadata: {
+      fileName: report.fileName,
+      fileType: report.format,
+      fileSize: report.size,
+      dimensions: report.dimensions,
+      source: report.source,
+    },
+    detectionResults: report.qr,
+    observedText: report.text,
+    risk: {
+      score: report.score,
+      scale: 100,
+      level: report.riskLevel,
+      factorsDetected: report.riskFactors,
+      signals: report.signals,
+    },
+    timeline: report.timeline,
+    processing: report.processing,
+    analyzedAt: report.analyzedAt,
+    privacy: 'Processed locally in browser; no image upload performed.',
+  }, null, 2) : '', [report]);
   const exportReport = () => {
     if (!report) return;
     const blob = new Blob([reportJson], { type: 'application/json' });

@@ -183,11 +183,19 @@
 .progress-track { height: 5px; background: hsl(var(--muted)); overflow: hidden; border-radius: 99px; }
 .progress-fill { height: 100%; background: hsl(var(--primary)); border-radius: inherit; transition: width .35s ease; }
 .metric-number { font-size: 2.1rem; line-height: 1; letter-spacing: -.06em; font-weight: 800; }
+.risk-score { font-size: 2rem; line-height: 1; letter-spacing: -.06em; font-weight: 800; white-space: nowrap; }
+.risk-score span { font-size: .72em; letter-spacing: -.03em; font-weight: 700; }
 .status-clean { color: hsl(var(--primary)); background: hsl(var(--primary) / .11); }
 .status-attention { color: hsl(var(--destructive)); background: hsl(var(--destructive) / .1); }
 .status-neutral { color: hsl(var(--muted-foreground)); background: hsl(var(--muted)); }
 .finding-row { border-top: 1px solid hsl(var(--border)); transition: background .2s; }
 .finding-row:hover { background: hsl(var(--muted) / .5); }
+.interpretation-card { background: linear-gradient(120deg, hsl(var(--card)), hsl(var(--primary) / .045)); }
+.indicator-chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 5px 8px; color: hsl(var(--destructive)); background: hsl(var(--destructive) / .09); font-size: 10px; font-weight: 700; }
+.timeline-card { background: hsl(var(--card)); }
+.timeline-event { position: relative; }
+.timeline-marker { display: grid; place-items: center; width: 25px; height: 25px; flex: 0 0 auto; border: 1px solid hsl(var(--primary) / .28); border-radius: 7px; color: hsl(var(--primary)); background: hsl(var(--primary) / .07); font-family: var(--app-font-mono); font-size: 9px; }
+.timeline-event:not(:nth-child(3n))::after { content: ''; position: absolute; left: 25px; top: 38px; width: 1px; height: calc(100% - 27px); background: hsl(var(--border)); }
 .archive-hero { background: linear-gradient(120deg, hsl(var(--card)), hsl(var(--primary) / .07)); }
 .archive-hero-inner { display: flex; align-items: center; justify-content: space-between; gap: 28px; padding: clamp(24px, 4vw, 40px); }
 .archive-count { min-width: 128px; display: flex; flex-direction: column; align-items: center; padding: 18px; border-left: 1px solid hsl(var(--border)); }
@@ -223,5 +231,6 @@
   .report-grid { grid-template-columns: 1fr !important; }
   .archive-hero-inner { align-items: flex-start; flex-direction: column; }
   .archive-count { align-items: flex-start; border-left: 0; border-top: 1px solid hsl(var(--border)); padding: 18px 0 0; width: 100%; }
+  .risk-score { font-size: 1.65rem; }
 }
 .mobile-brand { display: none; }

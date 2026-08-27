@@ -1,0 +1,200 @@
+Improve the existing forensic-analysis interface without redesigning the whole application. Keep the current visual style, layout, branding, colors, and overall workflow. The goal is to make the analysis output more credible, explainable, and investigation-focused.
+
+### 1. Fix the Risk Score presentation
+
+* Never display a standalone number such as `87`.
+* Always show the scale, for example:
+
+  * `87 / 100 — HIGH`
+  * `32 / 100 — SUSPICIOUS`
+  * `8 / 100 — LOW`
+* Make the risk level visually obvious.
+* Do not invent a risk score randomly. The score must be derived from actual detected signals.
+* Add a small "Risk factors" or "Signals detected" indicator where appropriate.
+
+### 2. Make the risk analysis explainable
+
+For every non-low-risk result, clearly show:
+
+* What was detected.
+* Which specific evidence triggered the risk score.
+* Why that evidence matters.
+* Confidence level, if the system has enough information to calculate one.
+
+Do NOT simply say something is "malicious" because it looks unusual.
+
+Prefer terminology such as:
+
+* `LOW RISK`
+* `SUSPICIOUS`
+* `HIGH RISK`
+* `REQUIRES INVESTIGATION`
+* `INSUFFICIENT EVIDENCE`
+
+Only use definitive claims when there is actual evidence supporting them.
+
+### 3. Improve QR/barcode findings
+
+When a QR code or barcode is actually detected, show:
+
+* Detection type: QR Code / Code 128 / EAN / etc.
+* Decoded payload.
+* Payload category: URL / UPI payment / plain text / other.
+* Suspicious indicators found.
+* Confidence/detection information where available.
+
+Example structure:
+
+QR CODE DETECTED
+
+Type: QR Code
+Payload type: URL
+Payload: [decoded payload]
+
+Indicators:
+
+* Suspicious URL structure
+* Unusual destination
+* Redirect pattern detected
+
+Risk:
+87 / 100 — HIGH
+
+Do not display "No QR or barcode detected" as an error when the uploaded image simply doesn't contain one. That is a valid negative test result.
+
+### 4. Make the explanation panel dynamic
+
+The explanation section must be generated from the actual inspection results.
+
+Do not use generic placeholder explanations such as "This image may contain suspicious content."
+
+Instead, explain the actual findings from the current inspection.
+
+For example:
+
+"QR code detected. The decoded payload contains a payment destination with an unusual identifier. No evidence of malicious activity was independently confirmed, so the result is classified as suspicious rather than definitively malicious."
+
+### 5. Add a clear final verdict
+
+At the top of the report, provide a clear verdict:
+
+LOW RISK
+SUSPICIOUS
+HIGH RISK
+INSUFFICIENT EVIDENCE
+
+Under it, provide one short explanation of why.
+
+### 6. Add an investigation timeline
+
+Where appropriate, show a simple forensic timeline:
+
+Evidence received
+↓
+Content detected
+↓
+Payload decoded
+↓
+Indicators analyzed
+↓
+Risk calculated
+↓
+Report generated
+
+Use the actual events that occurred during the inspection rather than fake timestamps.
+
+### 7. Improve evidence presentation
+
+Keep the original uploaded image visible.
+
+When possible:
+
+* Highlight the detected QR/barcode region.
+* Show the decoded payload beside or below it.
+* Clearly separate raw evidence from the system's interpretation.
+
+The system must distinguish between:
+`Observed evidence`
+and
+`System interpretation`.
+
+### 8. Keep forensic export useful
+
+The JSON/forensic export should contain structured information such as:
+
+* Case ID
+* File metadata
+* Detection results
+* QR/barcode type
+* Decoded payload
+* Risk score
+* Risk level
+* Individual risk indicators
+* Confidence, if available
+* Processing/network status
+* Timestamp of analysis
+
+Do not include fabricated forensic evidence.
+
+### 9. Preserve the existing strengths
+
+Do NOT remove or unnecessarily change:
+
+* Current branding
+* Current layout
+* Evidence Desk styling
+* Intake workflow
+* Local archive
+* Case functionality
+* New Inspection
+* Clear Desk
+* Export JSON
+* Local-processing/network status
+* File metadata
+* Existing visual hierarchy
+
+This is an improvement pass, not a complete redesign.
+
+### 10. Important testing requirement
+
+Create/maintain at least these test scenarios:
+
+A. Normal image
+Expected:
+
+* No QR/barcode detected
+* Low risk or insufficient evidence
+* No false positive
+
+B. Valid harmless QR
+Expected:
+
+* QR detected
+* Payload decoded correctly
+* Low risk if there are no suspicious indicators
+
+C. Synthetic suspicious QR
+Expected:
+
+* QR detected
+* Payload decoded
+* Suspicious indicators displayed
+* Elevated risk score with an explanation
+
+D. Invalid/corrupted image
+Expected:
+
+* Graceful error
+* No fabricated analysis
+
+The system must not confuse "nothing suspicious detected" with "the image is proven safe."
+
+### Most important requirement
+
+Do not make the interface look more impressive by adding fake forensic claims.
+
+The system should be **evidence-first**:
+
+OBSERVED → ANALYZED → EXPLAINED → SCORED → REPORTED
+
+Make the smallest code changes necessary to achieve this while preserving the existing application.
